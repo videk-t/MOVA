@@ -141,6 +141,7 @@ A 0–100 score built from five weighted components. Nothing about it is mysteri
 | Component | Weight | Reads |
 | --- | --- | --- |
 | 🛡 Safety | 30% | mint/freeze authority, LP burn or lock, holder concentration, deployer behaviour, insider/bundle/sniper cohorts, whether sells succeed |
+| | | *A failing sell check is decisive: safety goes to 0 and risk to high, ahead of every other signal.* |
 | 💧 Liquidity | 22% | pool depth against market cap, absolute depth, 24h trend |
 | 🚀 Momentum | 20% | price direction, turnover against the pool, buy/sell balance |
 | 🐋 Smart Money | 16% | net flow from large and historically profitable wallets |
@@ -233,6 +234,7 @@ MOVA runs end to end on free infrastructure. Nothing below requires a paid plan,
 | --- | --- | --- | --- |
 | Prices, liquidity, volume, txns, pair age, logos, project links | [DexScreener](https://docs.dexscreener.com/api/reference) | Free, 300 req/min | **No** |
 | Historical OHLCV candles | [DexPaprika](https://docs.dexpaprika.com) | Free, ~200K req/month | **No** |
+| Whether the token can actually be sold | [Jupiter](https://dev.jup.ag) | Free | **No** |
 | Mint authority, freeze authority, holder concentration | Solana JSON-RPC | Free | **No** (public node, throttled) |
 | Same, without throttling | [Helius](https://helius.dev) | Free tier, 1M credits/month | Yes — free, no card |
 | Hosting | [Render](https://render.com) | Free tier | Account only, **no card** |
@@ -249,7 +251,7 @@ MOVA runs end to end on free infrastructure. Nothing below requires a paid plan,
 
 ### Still unfilled, and the free options that exist
 
-- **Holder count** — Helius `getTokenAccounts` can count them within the free 1M credits, at roughly one paged call per token. Not yet wired up.
+- **Holder count** — Helius `getTokenAccounts` can count them within the free 1M credits, but exactly counting a token with 50,000 holders means paging fifty times per view. Deliberately not wired up: the credit cost is real and the number is decorative next to concentration, which MOVA already has.
 - **Wallet-level flows** (whale buys, smart money, deployer selling) — no free source found. Bitquery is the natural fit at $49/month. This is the one genuinely paid gap.
 - **Social metrics** — [Alternative.me Fear & Greed](https://alternative.me/crypto/fear-and-greed-index/) is free and unauthenticated but market-wide, not per-token. CoinGecko's free tier carries basic per-token community counts. Neither gives the mention velocity or bot-likeness the social panel is designed around.
 

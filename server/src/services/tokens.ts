@@ -2,6 +2,7 @@ import type { SocialSignal, TokenDetail, TokenSecurity, TokenSummary } from '@/c
 import { computeMovaScore } from '@/core/scoring';
 import * as dex from '../upstream/dexscreener.js';
 import * as rpc from '../upstream/solana-rpc.js';
+import * as jupiter from '../upstream/jupiter.js';
 import * as history from './history.js';
 
 /**
@@ -71,10 +72,18 @@ export async function finish(pair: dex.DexPair, signal?: AbortSignal): Promise<A
 
   const mint = await rpc.getMintInfo(address, signal);
   const holders = await rpc.getHolders(address, mint.supply, signal);
+  const sell = await jupiter.checkSell(
+    address,
+    mint.decimals,
+    pair.market.priceUsd,
+    pair.market.liquidityUsd,
+    signal,
+  );
 
   if (mint.mintAuthorityRevoked != null || holders.top10HolderPct != null) {
     sources.push('Solana RPC');
   }
+  if (sell.sellsSucceeding != null) sources.push('Jupiter');
 
   const security: TokenSecurity = {
     ...UNKNOWN_SECURITY,
@@ -85,6 +94,9 @@ export async function finish(pair: dex.DexPair, signal?: AbortSignal): Promise<A
     // to an incinerator is the closest keyless proxy for locked liquidity.
     lpBurnedPct: holders.burnedPct,
     liquidityChange24hPct: history.liquidityChange24hPct(address),
+    // Whether an exit exists at all. False here is decisive in the scoring
+    // model, so it is only ever set when a real pool had no routable sell.
+    sellsSucceeding: sell.sellsSucceeding,
   };
 
   for (const [field, value] of Object.entries(security)) {
