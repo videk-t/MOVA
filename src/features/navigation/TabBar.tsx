@@ -1,4 +1,4 @@
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
@@ -192,7 +192,14 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: palette.borderStrong,
-    backgroundColor: 'rgba(16, 18, 26, 0.82)',
+    // The blur carries the translucency on iOS. expo-blur barely blurs on
+    // Android without its experimental backend, so there the bar has to be
+    // near-opaque in its own right — at 0.82 alpha, list rows scrolling under
+    // it were legible straight through the tab labels.
+    backgroundColor: Platform.select({
+      ios: 'rgba(16, 18, 26, 0.82)',
+      default: 'rgba(13, 15, 22, 0.985)',
+    }),
   },
   tab: {
     flex: 1,

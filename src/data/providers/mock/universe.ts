@@ -614,6 +614,10 @@ export function candlesFor(token: MockToken, timeframe: Timeframe, count = 120, 
   for (let i = count - 1; i >= 0; i -= 1) {
     const start = now - i * step;
     const end = start + step;
+    // A token has no price before it existed. Emitting pre-launch buckets drew
+    // a dead-flat line at base price across most of a young token's chart. The
+    // bucket that straddles creation is kept, so the launch itself is visible.
+    if (end <= token.createdAt) continue;
     // Sample inside the bucket so wicks come from the same price function.
     const samples = [start, start + step * 0.25, start + step * 0.5, start + step * 0.75, end].map((t) =>
       priceAt(token, Math.min(t, now)),
