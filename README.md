@@ -280,6 +280,18 @@ winget install --id Microsoft.VCRedist.2015+.x64 -e
 npm approve-scripts unrs-resolver
 ```
 
+**3. Do not append to `.env` with `>>` in PowerShell 5.1.** It writes UTF-16, so the appended line arrives null-padded — `H·E·L·I·U·S·_·A·P·I·…` — and `dotenv` silently fails to parse it. The key looks set and behaves as though it is missing, with no error anywhere. Use an editor, or force the encoding:
+
+```bash
+Add-Content server/.env "HELIUS_API_KEY=your-key" -Encoding utf8
+```
+
+To check a key actually loaded:
+
+```bash
+cd server && node -e "require('dotenv').config(); console.log(!!process.env.HELIUS_API_KEY)"
+```
+
 **Do not upgrade ESLint past 9.x.** `eslint-config-expo@57` pulls `eslint-plugin-react@7.37`, which calls `context.getFilename()` — removed in ESLint 10. Linting dies with `contextOrFilename.getFilename is not a function`. The peer range (`>=8.10`) is too loose to prevent it, so the version in `package.json` is deliberate.
 
 ---
