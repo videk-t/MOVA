@@ -9,6 +9,8 @@ import { cache } from './cache.js';
 import * as limiter from './rate-limit.js';
 import { UpstreamError } from './http.js';
 import { envelope } from './services/meta.js';
+import * as dex from './upstream/dexscreener.js';
+import * as dexpaprika from './upstream/dexpaprika.js';
 import * as universe from './services/universe.js';
 import * as tokens from './services/tokens.js';
 import * as marketService from './services/market.js';
@@ -175,11 +177,28 @@ export function createApp() {
     const raw = new URL(c.req.url).searchParams.get('tf');
     const timeframe: Timeframe = TIMEFRAMES.includes(raw as Timeframe) ? (raw as Timeframe) : '1h';
 
-    const data: Candle[] = history.candles(address, timeframe);
-    // An empty series is a true statement — MOVA has not watched long enough —
-    // and the chart renders its own "not enough history" state for it.
+    // Real history first, keyed on the pair address DexScreener gives us.
+    const pairs = await dex.getTokens([address]);
+    const pairAddress = pairs.get(address)?.market.pairAddress ?? null;
+
+    let data: Candle[] = [];
+    let source = 'DexPaprika';
+
+    if (pairAddress != null) {
+      data = await dexpaprika.getCandles(pairAddress, timeframe);
+    }
+
+    // Fall back to what this server watched itself. Degrading to a shorter
+    // honest chart beats showing none because an upstream was down.
+    if (data.length === 0) {
+      data = history.candles(address, timeframe);
+      source = 'MOVA recorded history';
+    }
+
+    // An empty series is still a true statement, and the chart renders its own
+    // "not enough history" state for it.
     const missing = data.length === 0 ? ['candles'] : [];
-    return c.json(envelope(data, ['MOVA recorded history'], missing));
+    return c.json(envelope(data, [source], missing));
   });
 
   app.get('/v1/tokens/:address/holders', async (c) => {

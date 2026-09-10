@@ -12,7 +12,10 @@ import * as universe from './services/universe.js';
 
 const app = createApp();
 
-const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
+// 0.0.0.0 explicitly: every container platform routes to the published port on
+// all interfaces, and a service bound only to loopback fails its health check
+// with no useful error.
+const server = serve({ fetch: app.fetch, port: config.port, hostname: '0.0.0.0' }, (info) => {
   const caps = capabilities();
   console.log('');
   console.log(`  MOVA API listening on http://localhost:${info.port}`);

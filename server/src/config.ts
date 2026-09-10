@@ -75,7 +75,7 @@ export function capabilities() {
     market: 'DexScreener',
     onChain: config.rpcIsPublic ? 'Solana public RPC (throttled)' : 'Solana RPC',
     holders: true,
-    history: config.birdeyeApiKey ? 'Birdeye OHLCV' : 'recorded in-process',
+    history: 'DexPaprika OHLCV, falling back to recorded',
     social: config.xBearerToken ? 'X' : null,
     analysis: 'deterministic',
   };

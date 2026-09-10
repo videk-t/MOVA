@@ -25,7 +25,9 @@ Nothing in MOVA is financial advice, and no score is a prediction.
 - [The MOVA score](#the-mova-score)
 - [Data providers](#data-providers)
 - [The API](#the-api)
+- [Free tools](#free-tools)
 - [Demo mode vs live data](#demo-mode-vs-live-data)
+- [Deployment](#deployment)
 - [Setup](#setup)
 - [Environment variables](#environment-variables)
 - [Running locally](#running-locally)
@@ -50,6 +52,7 @@ Nothing in MOVA is financial advice, and no score is a prediction.
 | Charts | **react-native-svg** | Hand-drawn sparklines, score rings and equity curves; no chart library to fight for control. |
 | Sheets | **@gorhom/bottom-sheet v5** | Progressive disclosure — explanations and filters live one layer down. |
 | Backend | **Hono on Node** | Tiny, fast, excellent TypeScript. Runs on Node today and ports to Cloudflare Workers or any container host without a rewrite. |
+| Hosting | **Render free tier** | The only major platform still offering a real free tier with no credit card. Fly.io's free tier no longer exists for new accounts; Railway's is a trial credit that runs out. |
 | Backend testing | **Vitest** | Fast, zero-config with TS, and does not fight `jest-expo` in the same repo. |
 | Testing | **Jest + jest-expo + Testing Library** | Unit tests on pure logic, component tests where they earn their place. |
 
@@ -59,7 +62,8 @@ Nothing in MOVA is financial advice, and no score is a prediction.
 - **Score computed on-device, not fetched.** `computeMovaScore` is pure and cheap, memoised off the token query. This guarantees the score on screen always matches the data on screen — they cannot arrive from different refreshes. The server computes it with the same function for its list endpoints.
 - **DexScreener as the keyless baseline.** Choosing an upstream that needs no credential is why live mode works out of the box. A product that requires three signups before it shows anything real is a product most people never see working.
 - **The backend shares `src/core` rather than reimplementing it.** One scoring model, one normaliser, two runtimes. They cannot drift.
-- **Recorded history over synthesised candles.** With no OHLCV vendor, the server charts what it has actually observed. A new server has a short chart — which is a true statement, where a generated curve would not be.
+- **Every upstream is free and most need no key.** See [Free tools](#free-tools) — the whole data layer costs nothing, and only the on-chain RPC benefits from a (free) account.
+- **Recorded history as the chart's fallback, not its basis.** DexPaprika serves real OHLCV keylessly. If it is unreachable the server falls back to prices it observed itself, so the chart degrades to a shorter honest one rather than disappearing.
 - **Alerts evaluated on-device.** A sweep runs every 45s while the app is foregrounded. No server scheduler, no push infrastructure, and the app is genuinely useful today. The rule logic in `core/alert-rules.ts` is pure, so it moves to a backend worker unchanged when push delivery is added.
 - **No authentication in the MVP.** MOVA stores no funds and no credentials — everything is user-authored local content. Auth becomes necessary only when watchlists need to sync across devices.
 
@@ -216,6 +220,40 @@ The `meta` object is the honest half of the contract:
 `sources` is what answered. `missing` is what could not be obtained — the app reads it to render "Data unavailable" instead of a zero, and to tell the user which signals the analysis did not account for.
 
 **Rankings are computed, not bought.** DexScreener's boost feeds are paid placement, so they are used only to assemble a candidate set. What MOVA actually promotes is decided here, on measured turnover and price action.
+
+---
+
+## Free tools
+
+MOVA runs end to end on free infrastructure. Nothing below requires a paid plan, and only one requires an account.
+
+### In use
+
+| What | Source | Cost | Key needed |
+| --- | --- | --- | --- |
+| Prices, liquidity, volume, txns, pair age, logos, project links | [DexScreener](https://docs.dexscreener.com/api/reference) | Free, 300 req/min | **No** |
+| Historical OHLCV candles | [DexPaprika](https://docs.dexpaprika.com) | Free, ~200K req/month | **No** |
+| Mint authority, freeze authority, holder concentration | Solana JSON-RPC | Free | **No** (public node, throttled) |
+| Same, without throttling | [Helius](https://helius.dev) | Free tier, 1M credits/month | Yes — free, no card |
+| Hosting | [Render](https://render.com) | Free tier | Account only, **no card** |
+
+### Evaluated and rejected
+
+| Option | Why not |
+| --- | --- |
+| **Fly.io** | Free tier no longer exists for new accounts. Card required, trial is ~2 VM-hours |
+| **Railway** | Starts without a card but the $5 credit expires — not sustainably free |
+| **Bitquery** | 7-day trial, then $49/month. Would have covered wallet flows and holder counts |
+| **Birdeye** | Free tier exists but is key-gated and rate-limited below what MOVA needs; DexPaprika covers OHLCV without a key |
+| **LunarCrush** | Free tier is now market-data only — social sentiment moved behind payment |
+
+### Still unfilled, and the free options that exist
+
+- **Holder count** — Helius `getTokenAccounts` can count them within the free 1M credits, at roughly one paged call per token. Not yet wired up.
+- **Wallet-level flows** (whale buys, smart money, deployer selling) — no free source found. Bitquery is the natural fit at $49/month. This is the one genuinely paid gap.
+- **Social metrics** — [Alternative.me Fear & Greed](https://alternative.me/crypto/fear-and-greed-index/) is free and unauthenticated but market-wide, not per-token. CoinGecko's free tier carries basic per-token community counts. Neither gives the mention velocity or bot-likeness the social panel is designed around.
+
+Where a signal has no free source, MOVA reports it as unavailable rather than approximating it.
 
 ---
 
@@ -434,6 +472,30 @@ The consistent theme: **missing data must never become a plausible-looking numbe
 - **Rehydration is guarded.** Persisted state written by an older build can be any shape; every store validates it and falls back to a clean state rather than crashing.
 - **The backend treats its own upstreams as hostile.** Bounded timeouts, capped response sizes, and a non-JSON body rejected rather than parsed — a 200 carrying HTML means a proxy answered, not the API.
 - **Errors do not leak.** Internal messages and stacks stay in the log; clients get a sentence.
+
+---
+
+## Deployment
+
+The backend deploys to [Render](https://render.com)'s free tier. `render.yaml` at the repo root is a blueprint — Render reads it and configures everything.
+
+1. **New → Blueprint** on Render, point it at this repo. It finds `render.yaml`, sets `rootDir: server`, and builds.
+2. Add `HELIUS_API_KEY` in the dashboard when prompted. It is marked `sync: false` so no key is ever stored in the repo.
+3. Point the app at the deployed URL:
+
+```bash
+EXPO_PUBLIC_API_URL=https://mova-api.onrender.com
+```
+
+**The free instance sleeps after ~15 minutes idle and takes roughly 30 seconds to wake.** The first request after an idle period is slow; the rest are not. For MOVA that is an acceptable trade, and sleeping also stops it polling DexScreener while nobody is using it.
+
+`server/Dockerfile` exists so the platform choice stays reversible — Koyeb, Railway, Cloud Run or any container host takes it unchanged. Build context is the **repo root**, not `server/`, because the backend imports the app's `src/core`:
+
+```bash
+docker build -f server/Dockerfile -t mova-api .
+```
+
+A note on why the container runs TypeScript directly rather than compiled JavaScript: `tsc` does not rewrite path aliases on output, so a compiled build would emit unresolvable `@/core/…` imports. `tsx` resolves them at runtime, which is why it is a runtime dependency rather than a dev one.
 
 ---
 

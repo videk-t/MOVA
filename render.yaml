@@ -1,0 +1,47 @@
+# Render blueprint for the MOVA backend.
+#
+# Render is the deployment target because its free tier needs no credit card —
+# Fly.io's free tier no longer exists for new accounts, and Railway's is a
+# trial credit that runs out. This keeps MOVA deployable at zero cost.
+#
+# Deploy: push this file, then New > Blueprint on render.com and point it at
+# the repo. Everything below is picked up automatically.
+#
+# Free-tier caveat worth knowing: the service sleeps after ~15 minutes with no
+# inbound traffic and takes roughly 30 seconds to wake. The first request after
+# an idle period is slow; the rest are not. For MOVA that is an acceptable
+# trade, and sleeping also stops it polling DexScreener while nobody is using
+# it.
+
+services:
+  - type: web
+    name: mova-api
+    runtime: node
+    plan: free
+    region: frankfurt
+    # The repo root is the Expo app; the backend is a separate package.
+    rootDir: server
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Render injects PORT and expects the service to bind to it.
+      - key: LOG_REQUESTS
+        value: "false"
+      - key: UPSTREAM_CACHE_TTL_MS
+        value: "20000"
+      - key: STRUCTURAL_CACHE_TTL_MS
+        value: "600000"
+      # Slower than local: a sleeping free instance need not poll aggressively,
+      # and a shared cache serves every client anyway.
+      - key: UNIVERSE_REFRESH_MS
+        value: "120000"
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "60"
+      # Set in the Render dashboard, never here. sync:false means Render will
+      # prompt for it rather than store a value in the repo.
+      - key: HELIUS_API_KEY
+        sync: false
