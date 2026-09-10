@@ -24,6 +24,7 @@ Nothing in MOVA is financial advice, and no score is a prediction.
 - [Architecture](#architecture)
 - [The MOVA score](#the-mova-score)
 - [Data providers](#data-providers)
+- [The API](#the-api)
 - [Demo mode vs live data](#demo-mode-vs-live-data)
 - [Setup](#setup)
 - [Environment variables](#environment-variables)
@@ -48,12 +49,17 @@ Nothing in MOVA is financial advice, and no score is a prediction.
 | Animation | **Reanimated 4 + Gesture Handler** | UI-thread animation for charts, sheets and swipe rows. |
 | Charts | **react-native-svg** | Hand-drawn sparklines, score rings and equity curves; no chart library to fight for control. |
 | Sheets | **@gorhom/bottom-sheet v5** | Progressive disclosure — explanations and filters live one layer down. |
+| Backend | **Hono on Node** | Tiny, fast, excellent TypeScript. Runs on Node today and ports to Cloudflare Workers or any container host without a rewrite. |
+| Backend testing | **Vitest** | Fast, zero-config with TS, and does not fight `jest-expo` in the same repo. |
 | Testing | **Jest + jest-expo + Testing Library** | Unit tests on pure logic, component tests where they earn their place. |
 
 ### Decisions worth flagging
 
 - **Expo over bare RN.** The MVP needs zero native modules that Expo does not already ship. Reversible: `expo prebuild` gets you native projects when you need one.
-- **Score computed on-device, not fetched.** `computeMovaScore` is pure and cheap, memoised off the token query. This guarantees the score on screen always matches the data on screen — they cannot arrive from different refreshes.
+- **Score computed on-device, not fetched.** `computeMovaScore` is pure and cheap, memoised off the token query. This guarantees the score on screen always matches the data on screen — they cannot arrive from different refreshes. The server computes it with the same function for its list endpoints.
+- **DexScreener as the keyless baseline.** Choosing an upstream that needs no credential is why live mode works out of the box. A product that requires three signups before it shows anything real is a product most people never see working.
+- **The backend shares `src/core` rather than reimplementing it.** One scoring model, one normaliser, two runtimes. They cannot drift.
+- **Recorded history over synthesised candles.** With no OHLCV vendor, the server charts what it has actually observed. A new server has a short chart — which is a true statement, where a generated curve would not be.
 - **Alerts evaluated on-device.** A sweep runs every 45s while the app is foregrounded. No server scheduler, no push infrastructure, and the app is genuinely useful today. The rule logic in `core/alert-rules.ts` is pure, so it moves to a backend worker unchanged when push delivery is added.
 - **No authentication in the MVP.** MOVA stores no funds and no credentials — everything is user-authored local content. Auth becomes necessary only when watchlists need to sync across devices.
 
@@ -95,9 +101,32 @@ src/
   features/               composed, domain-aware components
   ui/                     the design system
   theme/                  colours, type scale, spacing, motion
+
+server/                   the backend — separate package, own runner
+  src/
+    app.ts                Hono routes, CORS, rate limiting, error shaping
+    config.ts             env parsing; the only place a key is read
+    cache.ts              TTL cache with single-flight
+    http.ts               outbound fetch: timeouts, retries, size caps
+    rate-limit.ts         per-IP sliding window
+    upstream/
+      dexscreener.ts      market data — no credential required
+      solana-rpc.ts       mint authority, holder concentration
+    services/
+      universe.ts         tracked token set, ranking, price recorder
+      tokens.ts           detail assembly, scoring, summaries
+      market.ts           overview aggregates
+      discover.ts         filter, sort, paginate
+      history.ts          recorded candles and sparklines
 ```
 
 The rule is one-directional: `app` → `features` → `ui`, and anything may import `core`. **`core` imports nothing but `core`** — which is exactly why it is testable without a renderer or a network.
+
+### The server shares the app's core
+
+`src/core` is pure TypeScript with no React and no React Native, so the backend imports it directly rather than reimplementing it. The scoring model, the payload normalisation and the analysis writer all run in both places from one source.
+
+That is not a convenience. It means **the score the server publishes is by construction the score the client would have computed** — the two cannot drift into disagreeing about the same token, because there is only one implementation.
 
 ---
 
@@ -153,18 +182,67 @@ Swapping DexScreener for Birdeye, or the mock generator for a live backend, is a
 
 ---
 
+## The API
+
+Read-only, JSON, no authentication. Every response is `{ data, meta }`.
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /health` | Uptime, active upstreams, tracked-token count, cache hit rate |
+| `GET /v1/market/overview` | SOL price, sentiment, breadth, aggregate volume |
+| `GET /v1/market/trending` | Ranked by turnover against pool depth |
+| `GET /v1/market/movers` | Ranked by absolute 24h move |
+| `GET /v1/market/unusual` | Volume far out of line with liquidity |
+| `GET /v1/tokens?…` | Filtered, sorted, paginated discovery |
+| `GET /v1/tokens/:address` | Full detail — market, security, wallets, social |
+| `GET /v1/tokens/batch?addresses=` | Summaries for many mints in one call |
+| `GET /v1/tokens/:address/candles?tf=` | OHLCV from recorded history |
+| `GET /v1/tokens/:address/holders` | Largest holders, pools and burns labelled |
+| `GET /v1/tokens/:address/social` | Project links; metrics when a key is set |
+| `GET /v1/tokens/:address/analysis` | The written analysis |
+| `GET /v1/search?q=` | Search across DexScreener, not just tracked tokens |
+
+The `meta` object is the honest half of the contract:
+
+```json
+{
+  "origin": "live",
+  "fetchedAt": 1757548800000,
+  "sources": ["DexScreener", "Solana RPC"],
+  "missing": ["top10HolderPct", "holders", "smartMoney"]
+}
+```
+
+`sources` is what answered. `missing` is what could not be obtained — the app reads it to render "Data unavailable" instead of a zero, and to tell the user which signals the analysis did not account for.
+
+**Rankings are computed, not bought.** DexScreener's boost feeds are paid placement, so they are used only to assemble a candidate set. What MOVA actually promotes is decided here, on measured turnover and price action.
+
+---
+
 ## Demo mode vs live data
 
-MOVA is **fully usable with no API keys at all.** The mock bundle generates a realistic universe of tokens, holders, wallet events, social signals and candles.
+Both modes run with **no API keys at all**, which is the point worth understanding before reading further.
 
-Demo data is never presented as real:
+**Demo mode** generates a realistic universe locally — tokens, holders, wallet events, social signals, candles. No network, no backend, no signup.
 
-- an amber `DEMO DATA` badge renders on every screen that shows generated figures
+**Live mode** serves real Solana market data. DexScreener needs no credential and the public Solana RPC needs no credential, so `npm start` in `server/` with an empty `.env` returns real prices, real liquidity, real transaction counts and real mint-authority checks. Keys buy depth and reliability, not basic function.
+
+Neither is ever presented as the other:
+
+- an amber `DEMO DATA` badge renders on every screen showing generated figures; a green `LIVE DATA` badge replaces it when the data is real
+- the badge is driven by `meta.origin`, which travels *attached to the payload* rather than read from a global flag — a screen cannot show the wrong label while holding the other kind of data
 - alert rows generated from mock data say *"From demo data"*
-- the token detail disclaimer names it explicitly
-- Profile shows the active provider and its origin
+- Profile names the active provider and its origin
 
 `getConfiguredMode()` falls back to mock if `EXPO_PUBLIC_DATA_MODE=live` but `EXPO_PUBLIC_API_URL` is unset — a misconfiguration produces labelled demo data, never a blank app.
+
+### What live mode cannot tell you
+
+This matters more than the feature list. Without vendor keys the backend cannot read holder counts, deployer behaviour, insider or sniper concentration, sell simulation, or social metrics. Every one of those returns `null` and is named in the response's `meta.missing`.
+
+The app then renders "Data unavailable" rather than a zero, the score model drops those signals from its weighting instead of scoring them badly, and the token page reports its own coverage — *"Based on 72% signal coverage"*. A partially-informed score says so.
+
+The risk verdict goes further: MOVA will not call a token **low risk** on authority checks alone, however clean they look. Passing the two checks that could run is not evidence about the four that could not, so a thinly-covered token is held at *moderate*.
 
 ---
 
@@ -220,34 +298,58 @@ Anything prefixed `EXPO_PUBLIC_` **ships inside the app bundle and is readable b
 
 ### Backend (`server/.env`) — never in the app
 
-| Variable | Purpose |
-| --- | --- |
-| `PORT` | Listen port |
-| `BIRDEYE_API_KEY` | Market and holder data |
-| `HELIUS_API_KEY` | On-chain authority and holder queries |
-| `ANTHROPIC_API_KEY` | The written analysis layer |
-| `X_BEARER_TOKEN` | Social signal |
-| `UPSTREAM_CACHE_TTL_MS` | Shared upstream cache window |
+**Every one of these is optional.** The server runs and serves real data with this file empty.
 
-Upstream credentials live **only** on the server. The app talks to MOVA's backend; the backend talks to vendors.
+| Variable | Default | What it buys |
+| --- | --- | --- |
+| `PORT` | `8787` | — |
+| `HELIUS_API_KEY` | unset | Replaces the RPC endpoint. The public node is heavily throttled, so without this the safety checks intermittently report unavailable |
+| `SOLANA_RPC_URL` | public mainnet | Any RPC provider, if not Helius |
+| `BIRDEYE_API_KEY` | unset | Historical OHLCV. Without it, charts are built from prices this server has recorded since it started |
+| `X_BEARER_TOKEN` | unset | Social metrics. Without it they report unavailable rather than being estimated |
+| `ANTHROPIC_API_KEY` | unset | Not required — the deterministic writer is the safer default, since it can only describe data it was given |
+| `UPSTREAM_CACHE_TTL_MS` | `15000` | Shared cache window |
+| `RATE_LIMIT_PER_MINUTE` | `120` | Per-IP ceiling |
+
+Upstream credentials live **only** on the server. The app talks to MOVA's backend; the backend talks to vendors. Nothing in `server/.env` is ever serialised into a response — that is the entire reason the backend exists.
 
 ---
 
 ## Running locally
 
+### Demo mode — no backend needed
+
 ```bash
 npm start
 ```
 
-Then scan the QR code with Expo Go, or press `i` / `a` for a simulator.
+Scan the QR code with Expo Go, or press `i` / `a` for a simulator.
+
+### Live mode — real Solana data
+
+Start the backend first, in its own terminal:
 
 ```bash
-npm run android
+cd server && npm install && npm run dev
 ```
 
+It prints what it can and cannot do on startup. Then point the app at it in `.env`:
+
 ```bash
-npm run ios
+EXPO_PUBLIC_DATA_MODE=live
 ```
+
+and start the app as above. The badge turns from amber `DEMO DATA` to green `LIVE DATA`.
+
+**A physical phone cannot reach your `localhost`.** Set `EXPO_PUBLIC_API_URL` to this machine's LAN address instead — `http://192.168.1.x:8787`. An Android emulator can use `adb reverse tcp:8787 tcp:8787`.
+
+### Checking the backend
+
+```bash
+curl http://localhost:8787/health
+```
+
+Reports uptime, which upstreams are active, how many tokens are tracked, cache hit rate, and how many price samples have been recorded.
 
 ---
 
@@ -263,15 +365,31 @@ npm run verify
 
 `verify` runs typecheck, lint and tests together — the gate to run before committing.
 
-Coverage concentrates on the logic that would be dangerous to get wrong:
+The backend is a separate package with its own runner. Vitest rather than Jest, because it is a Node service and does not belong under `jest-expo`:
 
-- **Scoring** — weighting, null handling, confidence withholding, honeypot override, risk banding
+```bash
+cd server && npm run verify
+```
+
+**244 tests total** — 182 app, 62 server. Coverage concentrates on the logic that would be dangerous to get wrong:
+
+**App**
+
+- **Scoring** — weighting, null handling, confidence withholding, honeypot override, risk banding, and that a thinly-covered token is never cleared as low risk
 - **Alert rules** — threshold crossing vs staying above, change rules needing prior state, cooldowns, divide-by-zero, breakout requiring price *and* turnover together
 - **Risk calculator** — position capping, inverted targets, sub-1:1 warnings, invalid input
 - **Journal stats** — win rate, profit factor with no losses, expectancy, max drawdown
 - **Normalization** — malformed payloads, missing fields, extreme values, hostile strings
 - **Input parsing** — half-typed decimals, exponential notation, NaN and Infinity
 - **Watchlist assembly** — missing summaries, non-finite metrics, nulls-last sorting
+
+**Server**
+
+- **Holder classification** — that a liquidity vault is excluded from concentration, that a burn is accounted separately, and that a throttled RPC reports *unknown* rather than *clean*. Pinned against recorded response shapes, because the public RPC is too rate-limited to exercise this reliably against the live network
+- **Cache** — TTL expiry, and that twenty concurrent misses collapse to one upstream request. A failed production is never cached, so a broken screen recovers as soon as the upstream does
+- **Discover filters** — that a token whose value for a filtered field is *unknown* is kept, while a known value that fails is dropped. Excluding unknowns would silently empty the list on a keyless deployment, which reads as a broken app rather than an uninformed one
+- **Recorded history** — that gaps in observation produce gaps in the chart rather than a carried-forward flat line, and that a 24h liquidity trend is withheld until 24 hours have actually been watched
+- **DexScreener mapping** — hostile token metadata: bidi overrides, control characters, 5000-character names, `javascript:` logo URLs
 
 The consistent theme: **missing data must never become a plausible-looking number.**
 
@@ -299,9 +417,11 @@ The consistent theme: **missing data must never become a plausible-looking numbe
 - **Token metadata is untrusted.** Names, symbols and links come from third parties and are coerced through `core/normalize.ts` before they reach a screen. Strings are length-capped; numbers are checked for finiteness.
 - **Addresses are validated before use.** `isSolanaAddress` gates every URL built from an address, so a hostile "address" cannot be used to construct a link.
 - **Outbound links are `https` only,** opened in an in-app browser that does not share MOVA's context.
-- **No secrets in the app.** Upstream keys live on the server.
+- **No secrets in the app.** Upstream keys are read in exactly one file, `server/src/config.ts`, and are never serialised into a response.
 - **No wallet, no keys, no signing.** There is no code path that could request or store one.
 - **Rehydration is guarded.** Persisted state written by an older build can be any shape; every store validates it and falls back to a clean state rather than crashing.
+- **The backend treats its own upstreams as hostile.** Bounded timeouts, capped response sizes, and a non-JSON body rejected rather than parsed — a 200 carrying HTML means a proxy answered, not the API.
+- **Errors do not leak.** Internal messages and stacks stay in the log; clients get a sentence.
 
 ---
 
@@ -309,19 +429,21 @@ The consistent theme: **missing data must never become a plausible-looking numbe
 
 Before this carries real users:
 
-1. **Move alerts server-side.** The foreground sweep is honest for an MVP but stops when the app closes. A worker plus Expo push notifications makes alerts reliable — `core/alert-rules.ts` runs unchanged.
-2. **Build the backend.** `server/` is a placeholder. It needs the provider endpoints, an upstream cache, and per-IP rate limiting.
-3. **Add error reporting.** Sentry or similar, with breadcrumbs from the query layer.
-4. **Rate-limit budgeting.** Stale times are tuned for a demo. Real vendor quotas should drive them, with a shared server-side cache in front.
-5. **Accessibility audit with a real screen reader.** Labels are in place throughout; they have not been walked end to end with VoiceOver or TalkBack.
-6. **Auth, if watchlists need to sync.** Not before.
+1. **Persist recorded history.** It currently lives in memory, so charts reset when the server restarts. This is one file (`services/history.ts`) and a table.
+2. **Move alerts server-side.** The foreground sweep is honest for an MVP but stops when the app closes. A worker plus Expo push notifications makes alerts reliable — `core/alert-rules.ts` is pure and runs unchanged.
+3. **Get a Helius key.** The public RPC's throttling is the single biggest quality gap in live mode: it is why holder concentration frequently reports unavailable, and why most tokens sit at *elevated* risk.
+4. **Shared cache and rate limiter.** Both are in-process, which is correct for one instance and wrong for two. `cache.ts` and `rate-limit.ts` are the only files that change.
+5. **Add error reporting.** Sentry or similar, with breadcrumbs from the query layer.
+6. **Accessibility audit with a real screen reader.** Labels are in place throughout; they have not been walked end to end with VoiceOver or TalkBack.
+7. **Auth, if watchlists need to sync.** Not before.
 
 ---
 
 ## Future integrations
 
-- Birdeye / DexScreener / Helius behind the live provider bundle
-- An LLM analysis provider replacing the deterministic writer in `providers/analysis.ts`
+- **Birdeye** — historical OHLCV, replacing recorded history; holder counts
+- **Helius** — an unthrottled RPC, plus deployer identification and launch analysis for the insider, sniper and bundle signals
+- **An LLM analysis provider** replacing the deterministic writer in `providers/analysis.ts` — behind the same `AnalysisProvider` interface, so it is a factory change
 - X and FOMO social signals with bot-likeness scoring
 - Push notification delivery for alerts
 - Wallet-address *watching* (read-only, never custody)

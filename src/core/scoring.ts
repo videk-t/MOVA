@@ -530,11 +530,22 @@ export function computeMovaScore(detail: TokenDetail): MovaScore {
  * high-momentum and high-risk at the same time. It is driven by safety, depth
  * and age only.
  */
+/**
+ * Safety coverage required before MOVA will call a token low-risk.
+ *
+ * Revoked mint and freeze authorities alone clear roughly a third of the
+ * safety model. That is worth knowing, but it says nothing about how the supply
+ * is distributed or whether the pool can be pulled — so it is not enough to
+ * justify the strongest reassurance the app can give.
+ */
+export const MIN_SAFETY_COVERAGE_FOR_LOW_RISK = 0.6;
+
 export function computeRiskLevel(components: ScoreComponent[], detail: TokenDetail): RiskLevel {
   if (detail.security.sellsSucceeding === false) return 'high';
   if (detail.security.mintAuthorityRevoked === false) return 'high';
 
-  const safety = components.find((c) => c.key === 'safety')?.score ?? null;
+  const safetyComponent = components.find((c) => c.key === 'safety');
+  const safety = safetyComponent?.score ?? null;
   const liquidity = components.find((c) => c.key === 'liquidity')?.score ?? null;
   const ageHours = tokenAgeHours(detail.market);
   const ageScore = ageHours == null ? null : ramp(ageHours, 1, 240);
@@ -547,10 +558,18 @@ export function computeRiskLevel(components: ScoreComponent[], detail: TokenDeta
 
   // Not enough information to clear a token — default to the cautious side.
   if (value == null || coverage < 0.3) return 'elevated';
-  if (value >= 78) return 'low';
-  if (value >= 60) return 'moderate';
-  if (value >= 40) return 'elevated';
-  return 'high';
+
+  const band: RiskLevel = value >= 78 ? 'low' : value >= 60 ? 'moderate' : value >= 40 ? 'elevated' : 'high';
+
+  // A safety score of 100 means "everything checkable passed", which is a very
+  // different statement when only two checks could run. Passing the readable
+  // checks is not evidence about the ones that were never answered, so a
+  // thinly-covered token is held at moderate rather than cleared.
+  if (band === 'low' && (safetyComponent?.coverage ?? 0) < MIN_SAFETY_COVERAGE_FOR_LOW_RISK) {
+    return 'moderate';
+  }
+
+  return band;
 }
 
 /** Sort comparator for scores. Nulls always sort last. */

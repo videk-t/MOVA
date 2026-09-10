@@ -3,7 +3,11 @@ const expoConfig = require('eslint-config-expo/flat');
 module.exports = [
   ...expoConfig,
   {
-    ignores: ['node_modules/**', 'dist/**', '.expo/**', 'server/dist/**', 'coverage/**'],
+    // The backend is a separate package. Linting a Node service with Expo's
+    // rules is a category error — `no-dynamic-env-var` exists because Expo
+    // inlines env vars into the app bundle, which is not how a server reads
+    // its configuration.
+    ignores: ['node_modules/**', 'dist/**', '.expo/**', 'server/**', 'coverage/**'],
   },
   {
     rules: {
