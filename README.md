@@ -479,14 +479,18 @@ The consistent theme: **missing data must never become a plausible-looking numbe
 
 ## Deployment
 
+**Live:** [`https://mova-api-mfnv.onrender.com/health`](https://mova-api-mfnv.onrender.com/health)
+
 The backend deploys to [Render](https://render.com)'s free tier. `render.yaml` at the repo root is a blueprint — Render reads it and configures everything.
+
+Note that Render appends a suffix to the hostname when the service name is taken, so the deployed URL will not be exactly `mova-api.onrender.com`. Take the URL from the service's log output — it prints `Available at your primary URL`.
 
 1. **New → Blueprint** on Render, point it at this repo. It finds `render.yaml`, sets `rootDir: server`, and builds.
 2. Add `HELIUS_API_KEY` in the dashboard when prompted. It is marked `sync: false` so no key is ever stored in the repo.
 3. Point the app at the deployed URL:
 
 ```bash
-EXPO_PUBLIC_API_URL=https://mova-api.onrender.com
+EXPO_PUBLIC_API_URL=https://mova-api-mfnv.onrender.com
 ```
 
 **The free instance sleeps after ~15 minutes idle and takes roughly 30 seconds to wake.** The first request after an idle period is slow; the rest are not. For MOVA that is an acceptable trade, and sleeping also stops it polling DexScreener while nobody is using it.
